@@ -140,6 +140,7 @@ extern "C" void irqHandler_65()
 extern "C" void arch_pageFaultHandler();
 extern "C" void pageFaultHandler(uint32 address, uint32 error)
 {
+  assert(!(error & FLAG_PF_RSVD) && "Reserved bit set in page table entry");
   PageFaultHandler::enterPageFault(address, error & FLAG_PF_USER,
                                    error & FLAG_PF_PRESENT,
                                    error & FLAG_PF_RDWR,
@@ -228,12 +229,14 @@ extern "C" void syscallHandler()
   currentThreadRegisters = currentThread->kernel_registers_;
   ArchInterrupts::enableInterrupts();
 
-  currentThread->user_registers_->eax = Syscall::syscallException(currentThread->user_registers_->eax,
-                                                                         currentThread->user_registers_->ebx,
-                                                                         currentThread->user_registers_->ecx,
-                                                                         currentThread->user_registers_->edx,
-                                                                         currentThread->user_registers_->esi,
-                                                                         currentThread->user_registers_->edi);
+  auto ret = Syscall::syscallException(currentThread->user_registers_->eax,
+                                       currentThread->user_registers_->ebx,
+                                       currentThread->user_registers_->ecx,
+                                       currentThread->user_registers_->edx,
+                                       currentThread->user_registers_->esi,
+                                       currentThread->user_registers_->edi);
+  currentThread->user_registers_->eax = ret;
+
 
   ArchInterrupts::disableInterrupts();
   currentThread->switch_to_userspace_ = 1;

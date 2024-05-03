@@ -23,16 +23,13 @@ Loader::~Loader()
 {
   delete userspace_debug_info_;
   delete hdr_;
+  userspace_debug_info_ = nullptr;
+  hdr_ = nullptr;
 }
 
 void Loader::loadPage(pointer virtual_address)
 {
   debug(LOADER, "Loader:loadPage: Request to load the page for address %p.\n", (void*)virtual_address);
-  if(arch_memory_.checkAddressValid(virtual_address))
-  {
-    debug(LOADER, "Loader::loadPage: The page has been mapped by someone else.\n");
-    return;
-  }
   const pointer virt_page_start_addr = virtual_address & ~(PAGE_SIZE - 1);
   const pointer virt_page_end_addr = virt_page_start_addr + PAGE_SIZE;
   bool found_page_content = false;
@@ -78,8 +75,13 @@ void Loader::loadPage(pointer virtual_address)
     Syscall::exit(666);
   }
 
-  arch_memory_.mapPage(virt_page_start_addr / PAGE_SIZE, ppn, true);
-  debug(LOADER, "Loader:loadPage: Load request for address %p has been successfully finished.\n", (void*)virtual_address);
+  bool page_mapped = arch_memory_.mapPage(virt_page_start_addr / PAGE_SIZE, ppn, true);
+  if (!page_mapped)
+  {
+    debug(LOADER, "Loader::loadPage: The page has been mapped by someone else.\n");
+    PageManager::instance()->freePPN(ppn);
+  }
+  debug(LOADER, "Loader::loadPage: Load request for address %p has been successfully finished.\n", (void*)virtual_address);
 }
 
 bool Loader::readFromBinary (char* buffer, l_off_t position, size_t length)
@@ -91,7 +93,7 @@ bool Loader::readFromBinary (char* buffer, l_off_t position, size_t length)
 
 bool Loader::readHeaders()
 {
-  MutexLock lock(program_binary_lock_);
+  ScopeLock lock(program_binary_lock_);
   hdr_ = new Elf::Ehdr;
 
   if(readFromBinary((char*)hdr_, 0, sizeof(Elf::Ehdr)))
@@ -112,7 +114,7 @@ bool Loader::readHeaders()
     debug(LOADER, "Expected program header size does not match advertised program header size\n");
     return false;
   }
-  phdrs_.resize(hdr_->e_phnum, true);
+  phdrs_.resize(hdr_->e_phnum);
   if(readFromBinary(reinterpret_cast<char*>(&phdrs_[0]), hdr_->e_phoff, hdr_->e_phnum*sizeof(Elf::Phdr)))
   {
     return false;
@@ -158,10 +160,10 @@ bool Loader::loadDebugInfoIfAvailable()
     return false;
   }
 
-  MutexLock lock(program_binary_lock_);
+  ScopeLock lock(program_binary_lock_);
 
   ustl::vector<Elf::Shdr> section_headers;
-  section_headers.resize(hdr_->e_shnum, true);
+  section_headers.resize(hdr_->e_shnum);
   if (readFromBinary(reinterpret_cast<char*>(&section_headers[0]), hdr_->e_shoff, hdr_->e_shnum*sizeof(Elf::Shdr)))
   {
     debug(USERTRACE, "Failed to load section headers!\n");
@@ -238,12 +240,19 @@ bool Loader::loadDebugInfoIfAvailable()
       if (!strcmp(&section_names[section.sh_name], ".swebdbg")) {
         debug(USERTRACE, "Found SWEBDbg Infos\n");
         size_t size = section.sh_size;
-        sweb_data = new char[size];
-        sweb_data_size = size;
-        if(readFromBinary(sweb_data, section.sh_offset, size)) {
-          debug(USERTRACE, "Could not read swebdbg section!\n");
-          delete[] sweb_data;
-          sweb_data = 0;
+        if(size) {
+          sweb_data = new char[size];
+          sweb_data_size = size;
+          if (readFromBinary(sweb_data, section.sh_offset, size)) {
+            debug(USERTRACE, "Could not read swebdbg section!\n");
+            delete[] sweb_data;
+            sweb_data = 0;
+          }
+        } else {
+          debug(USERTRACE, "SWEBDbg Infos are empty\n");
+          delete[] stab_data;
+          delete[] stabstr_data;
+          return false;
         }
       }
     }

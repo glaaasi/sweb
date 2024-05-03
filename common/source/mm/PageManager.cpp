@@ -40,7 +40,9 @@ PageManager::PageManager() : lock_("PageManager::lock_")
   {
     pointer start_address = 0, end_address = 0, type = 0;
     ArchCommon::getUsableMemoryRegion(i, start_address, end_address, type);
-    debug(PM, "Ctor: memory region from physical 0x%zx to 0x%zx of type %zd\n", start_address, end_address, type);
+    debug(PM, "Ctor: memory region from physical %zx to %zx (%zu bytes) of type %zd\n",
+          start_address, end_address, end_address - start_address, type);
+
     if (type == 1)
       highest_address = Max(highest_address, end_address & 0x7FFFFFFF);
   }
@@ -59,9 +61,9 @@ PageManager::PageManager() : lock_("PageManager::lock_")
     ArchCommon::getUsableMemoryRegion(i, start_address, end_address, type);
     if (type != 1)
       continue;
-    uint32 start_page = start_address / PAGE_SIZE;
-    uint32 end_page = end_address / PAGE_SIZE;
-    debug(PM, "Ctor: usable memory region: start_page: %d, end_page: %d, type: %zd\n", start_page, end_page, type);
+    size_t start_page = start_address / PAGE_SIZE;
+    size_t end_page = end_address / PAGE_SIZE;
+    debug(PM, "Ctor: usable memory region: start_page: %zx, end_page: %zx, type: %zd\n", start_page, end_page, type);
 
     for (size_t k = Max(start_page, lowest_unreserved_page_); k < Min(end_page, number_of_pages_); ++k)
     {
@@ -69,9 +71,7 @@ PageManager::PageManager() : lock_("PageManager::lock_")
     }
   }
 
-  //some of the usable memory regions are already in use by the kernel (within first 1024 pages)
-  //therefore, mark as reserved everything >2gb und <3gb already used in PageDirectory
-  debug(PM, "Ctor: Marking stuff mapped in above 2 and < 3 gig as used\n");
+  debug(PM, "Ctor: Marking pages used by the kernel as reserved\n");
   for (size_t i = ArchMemory::RESERVED_START; i < ArchMemory::RESERVED_END; ++i)
   {
     size_t physical_page = 0;
@@ -83,9 +83,12 @@ PageManager::PageManager() : lock_("PageManager::lock_")
       //our bitmap only knows 4k pages for now
       uint64 num_4kpages = this_page_size / PAGE_SIZE; //should be 1 on 4k pages and 1024 on 4m pages
       for (uint64 p = 0; p < num_4kpages; ++p)
+      {
         if (physical_page * num_4kpages + p < number_of_pages_)
           Bitmap::setBit(page_usage_table, used_pages, physical_page * num_4kpages + p);
+      }
       i += (num_4kpages - 1); //+0 in most cases
+
       if (num_4kpages == 1 && i % 1024 == 0 && pte_page < number_of_pages_)
         Bitmap::setBit(page_usage_table, used_pages, pte_page);
     }
@@ -95,9 +98,9 @@ PageManager::PageManager() : lock_("PageManager::lock_")
   //LastbutNotLeast: Mark Modules loaded by GRUB as reserved (i.e. pseudofs, etc)
   for (size_t i = 0; i < ArchCommon::getNumModules(); ++i)
   {
-    uint32 start_page = (ArchCommon::getModuleStartAddress(i) & 0x7FFFFFFF) / PAGE_SIZE;
-    uint32 end_page = (ArchCommon::getModuleEndAddress(i) & 0x7FFFFFFF) / PAGE_SIZE;
-    debug(PM, "Ctor: module: start_page: %d, end_page: %d\n", start_page, end_page);
+    size_t start_page = (ArchCommon::getModuleStartAddress(i) & 0x7FFFFFFF) / PAGE_SIZE;
+    size_t end_page = (ArchCommon::getModuleEndAddress(i) & 0x7FFFFFFF) / PAGE_SIZE;
+    debug(PM, "Ctor: module: start_page: %zx, end_page: %zx\n", start_page, end_page);
     for (size_t k = Min(start_page, number_of_pages_); k <= Min(end_page, number_of_pages_ - 1); ++k)
     {
       Bitmap::setBit(page_usage_table, used_pages, k);
@@ -107,6 +110,7 @@ PageManager::PageManager() : lock_("PageManager::lock_")
   }
 
   size_t num_pages_for_bitmap = (number_of_pages_ / 8) / PAGE_SIZE + 1;
+  assert(used_pages < number_of_pages_/2 && "No space for kernel heap!");
 
   HEAP_PAGES = number_of_pages_/2 - used_pages;
   if (HEAP_PAGES > 1024)
@@ -148,6 +152,17 @@ PageManager::PageManager() : lock_("PageManager::lock_")
   debug(PM, "Ctor: Physical pages - free: %zu used: %zu total: %u\n", page_usage_table_->getNumFreeBits(),
         page_usage_table_->getNumBitsSet(), number_of_pages_);
   assert(lowest_unreserved_page_ < number_of_pages_);
+
+
+  debug(PM, "Clearing free pages\n");
+  for(size_t p = lowest_unreserved_page_; p < number_of_pages_; ++p)
+  {
+    if(!page_usage_table_->getBit(p))
+    {
+      memset((void*)ArchMemory::getIdentAddressOfPPN(p), 0xFF, PAGE_SIZE);
+    }
+  }
+
   KernelMemoryManager::pm_ready_ = 1;
 }
 
@@ -177,36 +192,48 @@ bool PageManager::reservePages(uint32 ppn, uint32 num)
 
 uint32 PageManager::allocPPN(uint32 page_size)
 {
-  assert((page_size % PAGE_SIZE) == 0);
-  while (1)
-  {
-    lock_.acquire();
-    uint32 p;
-    uint32 found = 0;
-    for (p = lowest_unreserved_page_; !found && p < number_of_pages_; ++p)
-    {
-      if ((p % (page_size / PAGE_SIZE)) != 0)
-        continue;
-      if (reservePages(p, page_size / PAGE_SIZE))
-        found = p;
-    }
-    while (lowest_unreserved_page_ < number_of_pages_ && page_usage_table_->getBit(lowest_unreserved_page_))
-      ++lowest_unreserved_page_;
-    lock_.release();
+  uint32 p;
+  uint32 found = 0;
 
-    if (found == 0)
-    {
-      assert(false && "PageManager::allocPPN: Out of memory / No more free physical pages");
-    }
-    memset((void*)ArchMemory::getIdentAddressOfPPN(found), 0, page_size);
-    return found;
+  assert((page_size % PAGE_SIZE) == 0);
+
+  lock_.acquire();
+
+  for (p = lowest_unreserved_page_; !found && (p < number_of_pages_); ++p)
+  {
+    if ((p % (page_size / PAGE_SIZE)) != 0)
+      continue;
+    if (reservePages(p, page_size / PAGE_SIZE))
+      found = p;
   }
-  return 0;
+  while ((lowest_unreserved_page_ < number_of_pages_) && page_usage_table_->getBit(lowest_unreserved_page_))
+    ++lowest_unreserved_page_;
+
+  lock_.release();
+
+  if (found == 0)
+  {
+    assert(false && "PageManager::allocPPN: Out of memory / No more free physical pages");
+  }
+
+  const char* page_ident_addr = (const char*)ArchMemory::getIdentAddressOfPPN(found);
+  const char* page_modified = (const char*)memnotchr(page_ident_addr, 0xFF, page_size);
+  if(page_modified)
+  {
+    debug(PM, "Detected use-after-free for PPN %x at offset %zx\n", found, page_modified - page_ident_addr);
+    assert(!page_modified && "Page modified after free");
+  }
+
+  memset((void*)ArchMemory::getIdentAddressOfPPN(found), 0, page_size);
+  return found;
 }
 
 void PageManager::freePPN(uint32 page_number, uint32 page_size)
 {
   assert((page_size % PAGE_SIZE) == 0);
+
+  memset((void*)ArchMemory::getIdentAddressOfPPN(page_number), 0xFF, page_size);
+
   lock_.acquire();
   if (page_number < lowest_unreserved_page_)
     lowest_unreserved_page_ = page_number;
@@ -217,4 +244,3 @@ void PageManager::freePPN(uint32 page_number, uint32 page_size)
   }
   lock_.release();
 }
-

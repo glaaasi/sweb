@@ -11,7 +11,7 @@ asm(".equ PHYS_BASE,0xFFFFFFFF00000000");
 #define PRINT(X)
 #endif
 
-#define TRUNCATE(X) (char*)(((unsigned int)(((char*)X)+0x7FFFFFFF))+1) // virtual to physical address
+#define TRUNCATE(X) ({ volatile unsigned int x = (unsigned int)(((char*)X)+0x7FFFFFFF); (char*)(x+1); })
 
 #define MULTIBOOT_PAGE_ALIGN (1<<0)
 #define MULTIBOOT_MEMORY_INFO (1<<1)
@@ -48,7 +48,9 @@ typedef struct
     uint32 reserved_2;
     uint32 ist0_l;
     uint32 ist0_h;
-    uint32 reserved_3[15];
+    uint32 reserved_3[14];
+    uint16 reserved_4;
+    uint16 iobp;
 }__attribute__((__packed__)) TSS;
 
 TSS g_tss;
@@ -86,13 +88,13 @@ static void setSegmentDescriptor(uint32 index, uint32 baseH, uint32 baseL, uint3
   gdt_p[index].baseH = baseH;
   gdt_p[index].limitL = (uint16) (limit & 0xFFFF);
   gdt_p[index].limitH = (uint8) (((limit >> 16U) & 0xF));
-  gdt_p[index].typeH = code ? 0xA : 0xC; // 4kb + 64bit
+  gdt_p[index].typeH = tss ? 0 : (code ? 0xA : 0xC); // 4kb + 64bit
   gdt_p[index].typeL = (tss ? 0x89 : 0x92) | ((dpl & 0x3) << 5) | (code ? 0x8 : 0); // present bit + memory expands upwards + code
 }
 
 extern "C" void entry()
 {
-  asm("mov %ebx,multi_boot_structure_pointer - BASE");
+  asm volatile("mov %ebx,multi_boot_structure_pointer - BASE");
   PRINT("Booting...\n");
   PRINT("Clearing Framebuffer...\n");
   memset((char*) 0xB8000, 0, 80 * 25 * 2);
@@ -102,32 +104,32 @@ extern "C" void entry()
   memset(bss_start, 0, TRUNCATE(&bss_end_address) - bss_start);
 
   PRINT("Initializing Kernel Paging Structures...\n");
-  asm("movl $kernel_page_directory_pointer_table - BASE + 3, kernel_page_map_level_4 - BASE\n"
+  asm volatile("movl $kernel_page_directory_pointer_table - BASE + 3, kernel_page_map_level_4 - BASE\n"
       "movl $0, kernel_page_map_level_4 - BASE + 4\n");
-  asm("movl $kernel_page_directory - BASE + 3, kernel_page_directory_pointer_table - BASE\n"
+  asm volatile("movl $kernel_page_directory - BASE + 3, kernel_page_directory_pointer_table - BASE\n"
       "movl $0, kernel_page_directory_pointer_table - BASE + 4\n");
-  asm("movl $0x83, kernel_page_directory - BASE\n"
+  asm volatile("movl $0x83, kernel_page_directory - BASE\n"
       "movl $0, kernel_page_directory - BASE + 4\n");
 
   PRINT("Enable PSE and PAE...\n");
-  asm("mov %cr4,%eax\n"
+  asm volatile("mov %cr4,%eax\n"
       "or $0x20, %eax\n"
       "mov %eax,%cr4\n");
 
   PRINT("Setting CR3 Register...\n");
-  asm("mov %[pd],%%cr3" : : [pd]"r"(TRUNCATE(kernel_page_map_level_4)));
+  asm volatile("mov %[pd],%%cr3" : : [pd]"r"(TRUNCATE(kernel_page_map_level_4)));
 
   PRINT("Enable EFER.LME and EFER.NXE...\n");
-  asm("mov $0xC0000080,%ecx\n"
+  asm volatile("mov $0xC0000080,%ecx\n"
       "rdmsr\n"
       "or $0x900,%eax\n"
       "wrmsr\n");
 
-  asm("push $2\n"
+  asm volatile("push $2\n"
       "popf\n");
 
   PRINT("Enable Paging...\n");
-  asm("mov %cr0,%eax\n"
+  asm volatile("mov %cr0,%eax\n"
       "or $0x80010001,%eax\n"
       "mov %eax,%cr0\n");
 
@@ -137,12 +139,13 @@ extern "C" void entry()
   g_tss_p->ist0_l = (uint32) TRUNCATE(boot_stack) | 0x80004000;
   g_tss_p->rsp0_h = -1U;
   g_tss_p->rsp0_l = (uint32) TRUNCATE(boot_stack) | 0x80004000;
+  g_tss_p->iobp = -1;
 
   PRINT("Setup Segments...\n");
-  setSegmentDescriptor(1, 0, 0, 0, 0, 1, 0);
-  setSegmentDescriptor(2, 0, 0, 0, 0, 0, 0);
-  setSegmentDescriptor(3, 0, 0, 0, 3, 1, 0);
-  setSegmentDescriptor(4, 0, 0, 0, 3, 0, 0);
+  setSegmentDescriptor(1, 0, 0, 0xFFFFFFFF, 0, 1, 0);
+  setSegmentDescriptor(2, 0, 0, 0xFFFFFFFF, 0, 0, 0);
+  setSegmentDescriptor(3, 0, 0, 0xFFFFFFFF, 3, 1, 0);
+  setSegmentDescriptor(4, 0, 0, 0xFFFFFFFF, 3, 0, 0);
   setSegmentDescriptor(5, -1U, (uint32) TRUNCATE(&g_tss) | 0x80000000, sizeof(TSS) - 1, 0, 0, 1);
 
   PRINT("Loading Long Mode GDT...\n");
@@ -150,11 +153,11 @@ extern "C" void entry()
   struct GDT32Ptr gdt32_ptr;
   gdt32_ptr.limit = sizeof(gdt) - 1;
   gdt32_ptr.addr = (uint32) TRUNCATE(gdt);
-  asm("lgdt %[gdt_ptr]" : : [gdt_ptr]"m"(gdt32_ptr));
-  asm("mov %%ax, %%ds\n" : : "a"(KERNEL_DS));
+  asm volatile("lgdt %[gdt_ptr]" : : [gdt_ptr]"m"(gdt32_ptr));
+  asm volatile("mov %%ax, %%ds\n" : : "a"(KERNEL_DS));
 
   PRINT("Setting Long Mode Segment Selectors...\n");
-  asm("mov %%ax, %%ds\n"
+  asm volatile("mov %%ax, %%ds\n"
       "mov %%ax, %%es\n"
       "mov %%ax, %%ss\n"
       "mov %%ax, %%fs\n"
@@ -162,9 +165,9 @@ extern "C" void entry()
       : : "a"(KERNEL_DS));
 
   PRINT("Calling entry64()...\n");
-  asm("ljmp %[cs],$entry64-BASE\n" : : [cs]"i"(KERNEL_CS));
+  asm volatile("ljmp %[cs],$entry64-BASE\n" : : [cs]"i"(KERNEL_CS));
 
   PRINT("Returned from entry64()? This should never happen.\n");
-  asm("hlt");
+  asm volatile("hlt");
 }
 asm(".code64");

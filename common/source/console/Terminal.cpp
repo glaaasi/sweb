@@ -95,7 +95,7 @@ void Terminal::writeInternal(char character)
 
 void Terminal::write(char character)
 {
-  MutexLock lock(mutex_);
+  ScopeLock lock(mutex_);
   console_->lockConsoleForDrawing();
   writeInternal(character);
   console_->unLockConsoleForDrawing();
@@ -103,7 +103,7 @@ void Terminal::write(char character)
 }
 void Terminal::writeString(char const *string)
 {
-  MutexLock lock(mutex_);
+  ScopeLock lock(mutex_);
   console_->lockConsoleForDrawing();
   while (string && *string)
   {
@@ -124,7 +124,7 @@ int32 Terminal::writeData(uint32 offset, uint32 size, const char*buffer)
 
 void Terminal::writeBuffer(char const *buffer, size_t len)
 {
-  MutexLock lock(mutex_);
+  ScopeLock lock(mutex_);
   console_->lockConsoleForDrawing();
   while (len)
   {
@@ -168,7 +168,7 @@ uint32 Terminal::setCharacter(uint32 row, uint32 column, uint8 character)
 
 void Terminal::setForegroundColor(Console::CONSOLECOLOR const &color)
 {
-  MutexLock lock(mutex_);
+  ScopeLock lock(mutex_);
   // 4 bit set == 1+2+4+8, shifted by 0 bits
   uint8 mask = 15;
   current_state_ = current_state_ & ~mask;
@@ -177,7 +177,7 @@ void Terminal::setForegroundColor(Console::CONSOLECOLOR const &color)
 
 void Terminal::setBackgroundColor(Console::CONSOLECOLOR const &color)
 {
-  MutexLock lock(mutex_);
+  ScopeLock lock(mutex_);
   // 4 bit set == 1+2+4+8, shifted by 4 bits
   uint8 mask = 15 << 4;
   uint8 col = color;
@@ -195,24 +195,12 @@ void Terminal::initTerminalColors(Console::CONSOLECOLOR fg, Console::CONSOLECOLO
 
 void Terminal::scrollUp()
 {
-  uint32 i, k, runner;
+  memmove(characters_, &characters_[num_columns_], (num_rows_ - 1) * num_columns_);
+  memmove(character_states_, &character_states_[num_columns_], (num_rows_ - 1) * num_columns_);
 
-  runner = 0;
-  for (i = 0; i < num_rows_ - 1; ++i)
-  {
-    for (k = 0; k < num_columns_; ++k)
-    {
-      characters_[runner] = characters_[runner + num_columns_];
-      character_states_[runner] = character_states_[runner + num_columns_];
-      ++runner;
-    }
-  }
-  for (i = 0; i < num_columns_; ++i)
-  {
-    characters_[runner] = 0;
-    character_states_[runner] = 0;
-    ++runner;
-  }
+  memset(&characters_[(num_rows_ - 1) * num_columns_], 0, num_columns_);
+  memset(&character_states_[(num_rows_ - 1) * num_columns_], 0, num_columns_);
+
   if (active_)
     console_->consoleScrollUp(current_state_);
 
@@ -236,14 +224,14 @@ void Terminal::fullRedraw()
 
 void Terminal::setAsActiveTerminal()
 {
-  MutexLock lock(mutex_);
+  ScopeLock lock(mutex_);
   active_ = 1;
   fullRedraw();
 }
 
 void Terminal::unSetAsActiveTerminal()
 {
-  MutexLock lock(mutex_);
+  ScopeLock lock(mutex_);
   active_ = 0;
 }
 

@@ -6,12 +6,12 @@
 #include "panic.h"
 #include "debug_bochs.h"
 
-void kpanict ( uint8 * message )
+void kpanict ( const char * message )
 {
   system_state = KPANIC;
   ArchInterrupts::disableInterrupts();
 
-  size_t* stack = (size_t*) currentThread->getStackStartPointer();
+  size_t* stack = (size_t*) currentThread->getKernelStackStartPointer();
 
   kprintfd("%s \n", message );
   kprintf("%s \n", message );

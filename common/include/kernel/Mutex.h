@@ -1,7 +1,7 @@
 #pragma once
 
 #include "types.h"
-#include "MutexLock.h"
+#include "ScopeLock.h"
 #include "Lock.h"
 class Thread;
 
@@ -13,6 +13,9 @@ class Mutex: public Lock
 public:
 
   Mutex(const char* name);
+
+  Mutex(Mutex const &) = delete;
+  Mutex &operator=(Mutex const&) = delete;
 
   /**
    * like acquire, but instead of blocking the currentThread until the Lock is free
@@ -45,9 +48,6 @@ private:
    * and set to 0 when the mutex is released.
    */
   size_t mutex_;
-
-  Mutex(Mutex const &);
-  Mutex &operator=(Mutex const&);
 
 };
 

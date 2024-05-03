@@ -1,7 +1,0 @@
-INCLUDE(CMakeForceCompiler)
-SET(CMAKE_SYSTEM_NAME Generic)
-SET(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-set(CMAKE_C_COMPILER arm-none-eabi-gcc)
-set(APPEND_LD_ARGUMENTS -Wl,-no-whole-archive -Wl,-lgcc)
-set(CMAKE_C_FLAGS "-Wall -Werror -std=gnu11 -g -O0 -static -nostdinc -fno-builtin -nostdlib -fno-stack-protector -fno-common -mapcs -marm -Werror=implicit-function-declaration")
-set(CMAKE_C_LINK_FLAGS "")

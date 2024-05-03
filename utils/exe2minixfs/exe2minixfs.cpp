@@ -9,13 +9,14 @@
 #include "Dentry.h"
 #include "FileSystemInfo.h"
 #include "Superblock.h"
+#include "MinixFSType.h"
 #include "MinixFSSuperblock.h"
 #include "VfsSyscall.h"
 #include "VfsMount.h"
 
 Superblock* superblock_;
 FileSystemInfo* default_working_dir;
-VfsMount vfs_dummy_;
+
 
 FileSystemInfo* getcwd() { return default_working_dir; }
 
@@ -39,7 +40,7 @@ int main(int argc, char *argv[])
 
   if (image_fd == 0)
   {
-    printf("Error opening %s\n", argv[1]);
+    printf("exe2minixfs: Error opening %s\n", argv[1]);
     return -1;
   }
 
@@ -48,18 +49,25 @@ int main(int argc, char *argv[])
   if (strlen(end) != 0)
   {
     fclose(image_fd);
-    printf("offset has to be a number!\n");
+    printf("exe2minixfs: disk offset has to be a number!\n");
     return -1;
   }
 
-  superblock_ = (Superblock*) new MinixFSSuperblock(0, (size_t)image_fd, offset);
-  Dentry *mount_point = superblock_->getMountPoint();
-  mount_point->setMountPoint(mount_point);
+  MinixFSType* minixfs_type = new MinixFSType();
+
+  superblock_ = (Superblock*) new MinixFSSuperblock(minixfs_type, (size_t)image_fd, offset);
   Dentry *root = superblock_->getRoot();
+  superblock_->setMountPoint(root);
+  Dentry *mount_point = superblock_->getMountPoint();
+  mount_point->setMountedRoot(mount_point);
+
+  VfsMount vfs_dummy_(nullptr, mount_point, root, superblock_, 0);
+
 
   default_working_dir = new FileSystemInfo();
-  default_working_dir->setFsRoot(root, &vfs_dummy_);
-  default_working_dir->setFsPwd(root, &vfs_dummy_);
+  Path root_path(root, &vfs_dummy_);
+  default_working_dir->setRoot(root_path);
+  default_working_dir->setPwd(root_path);
 
   for (int32 i = 2; i <= argc / 2; i++)
   {
@@ -67,7 +75,7 @@ int main(int argc, char *argv[])
 
     if (src_file == 0)
     {
-      printf("Wasn't able to open file %s\n", argv[2 * i - 1]);
+      printf("exe2minixfs: Failed to open host file %s\n", argv[2 * i - 1]);
       break;
     }
 
@@ -77,25 +85,32 @@ int main(int argc, char *argv[])
     char *buf = new char[size];
 
     fseek(src_file, 0, SEEK_SET);
-    assert(fread(buf, 1, size, src_file) == size && "fread was not able to read all bytes of the file");
+    assert(fread(buf, 1, size, src_file) == size && "exe2minixfs: fread was not able to read all bytes of the file");
     fclose(src_file);
 
     VfsSyscall::rm(argv[2 * i]);
-    int32 fd = VfsSyscall::open(argv[2 * i], 2 | 4);
+    int32 fd = VfsSyscall::open(argv[2 * i], 4 | 8); // i.e. O_RDWR | O_CREAT
     if (fd < 0)
     {
-      printf("no success\n");
+      printf("exe2minixfs: Failed to open SWEB file %s\n", argv[2 * i]);
       delete[] buf;
       continue;
     }
-    VfsSyscall::write(fd, buf, size);
+    int32 write_status = VfsSyscall::write(fd, buf, size);
+    if((size_t)write_status != size)
+    {
+      printf("exe2minixfs: Writing %s failed with retval %d (expected %zu)\n", argv[2 * i], write_status, size);
+    }
     VfsSyscall::close(fd);
 
     delete[] buf;
   }
+
   delete default_working_dir;
   delete superblock_;
+  delete minixfs_type;
   fclose(image_fd);
+
   return 0;
 }
 

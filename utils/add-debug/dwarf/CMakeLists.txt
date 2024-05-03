@@ -1,7 +1,7 @@
 # Attention: This CMakeLists.txt implements the bare minimum of what is
 #            required by SWEB.
 
-cmake_minimum_required(VERSION 3.0.2)
+cmake_minimum_required(VERSION 3.1.0)
 
 set(CMAKE_CXX_STANDARD 11)
 
@@ -19,3 +19,7 @@ add_library(dwarf++ STATIC
 
 # This is needed for the out-of-source generated to_string.cc
 target_include_directories(dwarf++ PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+
+if(${CMAKE_VERSION} VERSION_GREATER "3.6.0" OR ${CMAKE_VERSION} VERSION_EQUAL "3.6.0") 
+    target_compile_features(dwarf++ INTERFACE cxx_range_for cxx_generalized_initializers cxx_defaulted_functions cxx_attributes)
+endif()

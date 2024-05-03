@@ -4,6 +4,8 @@
 #include "assert.h"
 #include "PageManager.h"
 #include "kstring.h"
+#include "ArchThreads.h"
+#include "Thread.h"
 
 PageMapLevel4Entry kernel_page_map_level_4[PAGE_MAP_LEVEL_4_ENTRIES] __attribute__((aligned(0x1000)));
 PageDirPointerTableEntry kernel_page_directory_pointer_table[2 * PAGE_DIR_POINTER_TABLE_ENTRIES] __attribute__((aligned(0x1000)));
@@ -44,18 +46,18 @@ bool ArchMemory::unmapPage(uint64 virtual_page)
   bool empty = checkAndRemove<PageTableEntry>(getIdentAddressOfPPN(m.pt_ppn), m.pti);
   if (empty)
   {
-    PageManager::instance()->freePPN(m.pt_ppn);
     empty = checkAndRemove<PageDirPageTableEntry>(getIdentAddressOfPPN(m.pd_ppn), m.pdi);
+    PageManager::instance()->freePPN(m.pt_ppn);
   }
   if (empty)
   {
-    PageManager::instance()->freePPN(m.pd_ppn);
     empty = checkAndRemove<PageDirPointerTablePageDirEntry>(getIdentAddressOfPPN(m.pdpt_ppn), m.pdpti);
+    PageManager::instance()->freePPN(m.pd_ppn);
   }
   if (empty)
   {
-    PageManager::instance()->freePPN(m.pdpt_ppn);
     empty = checkAndRemove<PageMapLevel4Entry>(getIdentAddressOfPPN(m.pml4_ppn), m.pml4i);
+    PageManager::instance()->freePPN(m.pdpt_ppn);
   }
   return true;
 }
@@ -109,12 +111,14 @@ bool ArchMemory::mapPage(uint64 virtual_page, uint64 physical_page, uint64 user_
   {
     return insert<PageTableEntry>(getIdentAddressOfPPN(m.pt_ppn), m.pti, physical_page, 0, 0, user_access, 1);
   }
-  assert(false); // you should never get here
+
   return false;
 }
 
 ArchMemory::~ArchMemory()
 {
+  assert(currentThread->kernel_registers_->cr3 != page_map_level_4_ * PAGE_SIZE && "thread deletes its own arch memory");
+
   PageMapLevel4Entry* pml4 = (PageMapLevel4Entry*) getIdentAddressOfPPN(page_map_level_4_);
   for (uint64 pml4i = 0; pml4i < PAGE_MAP_LEVEL_4_ENTRIES / 2; pml4i++) // free only lower half
   {
@@ -270,9 +274,9 @@ void ArchMemory::mapKernelPage(size_t virtual_page, size_t physical_page)
   assert(pd[mapping.pdi].pt.present);
   PageTableEntry *pt = (PageTableEntry*) getIdentAddressOfPPN(pd[mapping.pdi].pt.page_ppn);
   assert(!pt[mapping.pti].present);
-  pt[mapping.pti].present = 1;
   pt[mapping.pti].writeable = 1;
   pt[mapping.pti].page_ppn = physical_page;
+  pt[mapping.pti].present = 1;
   asm volatile ("movq %%cr3, %%rax; movq %%rax, %%cr3;" ::: "%rax");
 }
 

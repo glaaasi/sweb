@@ -26,11 +26,12 @@ UserProcess::UserProcess(ustl::string filename, FileSystemInfo *fs_info, uint32 
   }
 
   size_t page_for_stack = PageManager::instance()->allocPPN();
-  loader_->arch_memory_.mapPage(USER_BREAK / PAGE_SIZE - 1, page_for_stack, 1);
+  bool vpn_mapped = loader_->arch_memory_.mapPage(USER_BREAK / PAGE_SIZE - 1, page_for_stack, 1);
+  assert(vpn_mapped && "Virtual page for stack was already mapped - this should never happen");
 
   ArchThreads::createUserRegisters(user_registers_, loader_->getEntryFunction(),
                                    (void*) (USER_BREAK - sizeof(pointer)),
-                                   getStackStartPointer());
+                                   getKernelStackStartPointer());
 
   ArchThreads::setAddressSpace(this, loader_->arch_memory_);
 
@@ -49,7 +50,7 @@ UserProcess::~UserProcess()
   loader_ = 0;
 
   if (fd_ > 0)
-    vfs_syscall.close(fd_);
+    VfsSyscall::close(fd_);
 
   delete working_dir_;
   working_dir_ = 0;

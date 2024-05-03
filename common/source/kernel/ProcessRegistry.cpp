@@ -4,8 +4,8 @@
 #include "UserProcess.h"
 #include "kprintf.h"
 #include "VfsSyscall.h"
+#include "VirtualFileSystem.h"
 
-extern VfsSyscall vfs_syscall;
 
 ProcessRegistry* ProcessRegistry::instance_ = 0;
 
@@ -33,10 +33,16 @@ void ProcessRegistry::Run()
 
   debug(PROCESS_REG, "mounting userprog-partition \n");
 
-  vfs_syscall.mkdir("/usr", 0);
   debug(PROCESS_REG, "mkdir /usr\n");
-  vfs_syscall.mount("idea1", "/usr", "minixfs", 0);
+  assert( !VfsSyscall::mkdir("/usr", 0) );
   debug(PROCESS_REG, "mount idea1\n");
+  assert( !VfsSyscall::mount("idea1", "/usr", "minixfs", 0) );
+
+  debug(PROCESS_REG, "mkdir /dev\n");
+  assert( !VfsSyscall::mkdir("/dev", 0) );
+  debug(PROCESS_REG, "mount devicefs\n");
+  assert( !VfsSyscall::mount(NULL, "/dev", "devicefs", 0) );
+
 
   KernelMemoryManager::instance()->startTracing();
 
@@ -54,7 +60,9 @@ void ProcessRegistry::Run()
 
   debug(PROCESS_REG, "unmounting userprog-partition because all processes terminated \n");
 
-  vfs_syscall.umount("/usr", 0);
+  VfsSyscall::umount("/usr", 0);
+  VfsSyscall::umount("/dev", 0);
+  vfs.rootUmount();
 
   Scheduler::instance()->printStackTraces();
 
@@ -82,7 +90,7 @@ void ProcessRegistry::processStart()
 
 size_t ProcessRegistry::processCount()
 {
-  MutexLock lock(counter_lock_);
+  ScopeLock lock(counter_lock_);
   return progs_running_;
 }
 

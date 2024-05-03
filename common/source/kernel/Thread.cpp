@@ -35,7 +35,7 @@ Thread::Thread(FileSystemInfo *working_dir, ustl::string name, Thread::TYPE type
     my_terminal_(0), working_dir_(working_dir), name_(name)
 {
   debug(THREAD, "Thread ctor, this is %p, stack is %p, fs_info ptr: %p\n", this, kernel_stack_, working_dir_);
-  ArchThreads::createKernelRegisters(kernel_registers_, (void*) (type == Thread::USER_THREAD ? 0 : threadStartHack), getStackStartPointer());
+  ArchThreads::createKernelRegisters(kernel_registers_, (void*) (type == Thread::USER_THREAD ? 0 : threadStartHack), getKernelStackStartPointer());
   kernel_stack_[2047] = STACK_CANARY;
   kernel_stack_[0] = STACK_CANARY;
 }
@@ -73,7 +73,7 @@ void Thread::kill()
   }
 }
 
-void* Thread::getStackStartPointer()
+void* Thread::getKernelStackStartPointer()
 {
   pointer stack = (pointer) kernel_stack_;
   stack += sizeof(kernel_stack_) - sizeof(uint32);
@@ -129,7 +129,7 @@ void Thread::printBacktrace(bool use_stored_registers)
     debug(BACKTRACE, "Kernel debug info not set up, backtrace won't look nice!\n");
   }
 
-  assert(BACKTRACE_MAX_FRAMES < 128);
+  static_assert(BACKTRACE_MAX_FRAMES < 128);
   pointer call_stack[BACKTRACE_MAX_FRAMES];
   size_t count = 0;
 

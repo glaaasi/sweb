@@ -42,7 +42,7 @@ public:
  * @param user_access PTE User/Supervisor Flag, governing the binary Paging
  * Privilege Mechanism
  */
-  bool mapPage(uint64 virtual_page, uint64 physical_page, uint64 user_access);
+  __attribute__((warn_unused_result)) bool mapPage(uint64 virtual_page, uint64 physical_page, uint64 user_access);
 
 /**
  * removes the mapping to a virtual_page by marking its PTE Entry as non valid
@@ -66,11 +66,6 @@ public:
     static pointer getIdentAddressOfPPN(uint64 ppn, uint32 page_size=PAGE_SIZE)
     {
       return 0xFFFFF00000000000ULL | (ppn * page_size);
-    }
-
-    static pointer getIdentAddress(uint64 address)
-    {
-      return 0xFFFFF00000000000ULL | (address);
     }
 
 /**

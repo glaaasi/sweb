@@ -28,6 +28,12 @@ void ArchThreads::setAddressSpace(Thread *thread, ArchMemory& arch_memory)
   thread->kernel_registers_->cr3 = arch_memory.page_map_level_4_ * PAGE_SIZE;
   if (thread->user_registers_)
     thread->user_registers_->cr3 = arch_memory.page_map_level_4_ * PAGE_SIZE;
+
+  if(thread == currentThread)
+  {
+          asm volatile("movq %[new_cr3], %%cr3\n"
+                       ::[new_cr3]"r"(arch_memory.page_map_level_4_ * PAGE_SIZE));
+  }
 }
 
 void ArchThreads::createBaseThreadRegisters(ArchThreadRegisters *&info, void* start_function, void* stack)
@@ -91,7 +97,7 @@ size_t ArchThreads::testSetLock(size_t &lock, size_t new_value)
 
 uint64 ArchThreads::atomic_add(uint64 &value, int64 increment)
 {
-  int32 ret=increment;
+  int64 ret=increment;
   __asm__ __volatile__(
   "lock; xadd %0, %1;"
   :"=a" (ret), "=m" (value)

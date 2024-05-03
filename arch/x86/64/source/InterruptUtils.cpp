@@ -182,9 +182,17 @@ extern "C" void irqHandler_65()
   arch_contextSwitch();
 }
 
+extern "C" void errorHandler(size_t num, size_t eip, size_t cs, size_t spurious);
 extern "C" void arch_pageFaultHandler();
 extern "C" void pageFaultHandler(uint64 address, uint64 error)
 {
+  if (address >= USER_BREAK && address < KERNEL_START) { // dirty hack due to qemu invoking the pf handler when accessing non canonical addresses
+    auto &regs = *(currentThread->switch_to_userspace_ ? currentThread->user_registers_ : currentThread->kernel_registers_);
+    errorHandler(0xd, regs.rip, regs.cs, 0);
+    assert(0 && "thread should not survive a GP fault");
+  }
+  assert(!(error & FLAG_PF_RSVD) && "Reserved bit set in page table entry");
+
   PageFaultHandler::enterPageFault(address, error & FLAG_PF_USER,
                                    error & FLAG_PF_PRESENT,
                                    error & FLAG_PF_RDWR,
@@ -273,13 +281,14 @@ extern "C" void syscallHandler()
   currentThreadRegisters = currentThread->kernel_registers_;
   ArchInterrupts::enableInterrupts();
 
-  currentThread->user_registers_->rax =
-    Syscall::syscallException(currentThread->user_registers_->rax,
-                  currentThread->user_registers_->rbx,
-                  currentThread->user_registers_->rcx,
-                  currentThread->user_registers_->rdx,
-                  currentThread->user_registers_->rsi,
-                  currentThread->user_registers_->rdi);
+  auto ret = Syscall::syscallException(currentThread->user_registers_->rax,
+                                       currentThread->user_registers_->rbx,
+                                       currentThread->user_registers_->rcx,
+                                       currentThread->user_registers_->rdx,
+                                       currentThread->user_registers_->rsi,
+                                       currentThread->user_registers_->rdi);
+
+  currentThread->user_registers_->rax = ret;
 
   ArchInterrupts::disableInterrupts();
   currentThread->switch_to_userspace_ = 1;
@@ -340,7 +349,10 @@ extern "C" void errorHandler(size_t num, size_t eip, size_t cs, size_t spurious)
     currentThreadRegisters = currentThread->kernel_registers_;
     ArchInterrupts::enableInterrupts();
     debug(CPU_ERROR, "Terminating process...\n");
-    currentThread->kill();
+    if (currentThread->user_registers_)
+      Syscall::exit(888);
+    else
+      currentThread->kill();
   }
 }
 
